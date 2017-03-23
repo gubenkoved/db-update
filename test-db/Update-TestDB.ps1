@@ -1,0 +1,11 @@
+..\scripts\Update-Database.ps1 -serverInstance localhost `
+    -dbuser 'sa' `
+    -dbpass 'sa' `
+    -database 'test' `
+    -changeScriptsLocation '.\schema-changes' `
+    -recreateStoredProcedures $true `
+    -storedProceduresLocation '.\stored-procedures' `
+    -recreateFunctions $true `
+    -functionsLocation '.\functions' `
+    -recreateViews $true `
+    -viewsLocation '.\views'

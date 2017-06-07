@@ -141,19 +141,15 @@ function Check-DBVersionControl
         [DBConnectionInfo] $connectionInfo
     )
 
-  $result = Invoke-Sqlcmd `
+  $result = Invoke-Sqlcmd2 `
     -Query "SELECT * 
                  FROM INFORMATION_SCHEMA.TABLES 
                  WHERE TABLE_SCHEMA = 'dbo' 
                  AND  TABLE_NAME = 'SchemaChanges'" `
-    -ServerInstance $connectionInfo.Server `
-    -Database $connectionInfo.Database `
-        -Username $connectionInfo.DbUser `
-        -Password $connectionInfo.DbPass `
-        -ErrorAction Stop
-
+    -ConnectionInfo $connectionInfo `
+    -ErrorAction Stop
 	
-  #true means enabled version control
+  # true means enabled version control
   return $result -ne $null
 }
 

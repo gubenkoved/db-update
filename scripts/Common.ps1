@@ -188,7 +188,9 @@ function Wrap-SQLBatches
     -- start block {0}
     go
   '
-    $postTempl = "go
+    
+    $postTempl = "
+    go
     if @@error <> 0 and @@trancount > 0 begin print 'rollback on block #{0}'; rollback end
     if @@trancount = 0 begin print 'error in block #{0}'; set nocount on; set noexec on; end
     -- end block {0}

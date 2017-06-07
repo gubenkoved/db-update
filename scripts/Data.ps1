@@ -7,6 +7,7 @@ class DBConnectionInfo
     [string] $Database
     [string] $DbUser
     [string] $DbPass
+    [bool] $UseAzureADAuth
 
     [void] Validate()
     {
@@ -21,7 +22,7 @@ class DBConnectionInfo
     
     [string] ToString()
     {
-        return '[Server:{0};DB:{1};User:{2}]' -f $this.Server, $this.Database, $this.DbUser
+        return '[Server:{0};DB:{1};User:{2};UseAD:{3}]' -f $this.Server, $this.Database, $this.DbUser, $this.UseAzureADAuth
     }
 }
 

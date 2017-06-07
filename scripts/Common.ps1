@@ -28,7 +28,10 @@ function Create-ConnectionInfo()
         [string] $DbUser,
 
         [parameter(Mandatory=$true)]
-        [string] $DbPass
+        [string] $DbPass,
+
+        [parameter(Mandatory=$false)]
+        [bool] $UseAzureADAuth = $false
     )
     
     [DBConnectionInfo] $connectionInfo = New-Object DBConnectionInfo
@@ -37,6 +40,7 @@ function Create-ConnectionInfo()
     $connectionInfo.Database = $Database
     $connectionInfo.DbUser = $DbUser
     $connectionInfo.DbPass = $DbPass
+    $connectionInfo.UseAzureADAuth = $UseAzureADAuth
     
     return $connectionInfo
 }
@@ -58,26 +62,33 @@ function Invoke-Sqlcmd2
         [int] $QueryTimeout = 30
     )
 
-  if ($WhatIfPreference -eq $true)
-  {
+    if ($WhatIfPreference -eq $true)
+    {
     Write-Host "[WHATIF MODE] Executing following SQL against '$ConnectionInfo' (timeout: $QueryTimeout sec): `n$Query"
-  } else
-  {
-      Invoke-Sqlcmd `
-        -Query $Query `
-        -QueryTimeout $QueryTimeout `
-        -ServerInstance $ConnectionInfo.Server `
-        -Database $ConnectionInfo.Database `
-        -Username $ConnectionInfo.DbUser `
-        -Password $ConnectionInfo.DbPass
+    } else
+    {
+        # assembly connection string
+        $connectionString = "User ID=$($ConnectionInfo.DbUser);Password=$($ConnectionInfo.DbPass);Initial Catalog=$($ConnectionInfo.Database);Data Source=$($ConnectionInfo.Server);"
 
-      if ($? -eq $false) # last command status is not OK and ErrorAction allows to go this line (Continue, SilentlyContinue)
-      {
-        [string]$msg = $Error[0].ToString()
+        if ($ConnectionInfo.UseAzureADAuth)
+        {
+            $connectionString += 'Authentication=Active Directory Password;'
+        }
 
-        Write-Warning "$msg"
-      }
-  }
+        $result = Invoke-Sqlcmd `
+            -Query $Query `
+            -QueryTimeout $QueryTimeout `
+            -ConnectionString $connectionString
+
+        if ($? -eq $false) # last command status is not OK and ErrorAction allows to go this line (Continue, SilentlyContinue)
+        {
+            [string]$msg = $Error[0].ToString()
+
+            Write-Warning "$msg"
+        }
+
+        return $result
+    }
 }
 
 function Exec-SQL()
@@ -117,8 +128,16 @@ function Exec-SQL()
     # after script executed whether or not it left record in this table
     # -I enables quoted identifiers
 
-    $sqlcmdOut = SQLCMD.EXE -S "$server" -d "$db" -U "$user" -P "$pass" -i $tempPathForQuery -I `
-        | Out-File $tempPathForLog
+    if ($connectionInfo.UseAzureADAuth)
+    {
+        $sqlcmdOut = SQLCMD.EXE -S "$server" -d "$db" -U "$user" -P "$pass" -i $tempPathForQuery -I -G `
+            | Out-File $tempPathForLog
+    }
+    else
+    {
+        $sqlcmdOut = SQLCMD.EXE -S "$server" -d "$db" -U "$user" -P "$pass" -i $tempPathForQuery -I `
+            | Out-File $tempPathForLog
+    }
 
     $outContent = [IO.File]::ReadAllText($tempPathForLog)
 
@@ -150,7 +169,7 @@ function Check-DBVersionControl
     -ErrorAction Stop
 	
   # true means enabled version control
-  return $result -ne $null
+  return $null -ne $result
 }
 
 function Get-DbUpdateConfirmation

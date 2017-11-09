@@ -47,7 +47,6 @@ function Create-ConnectionInfo()
 
 function Invoke-Sqlcmd2
 {
-    [CmdletBinding(SupportsShouldProcess=$true)]
     param
     (
         [Parameter(Mandatory=$true)]
@@ -56,39 +55,33 @@ function Invoke-Sqlcmd2
 
         [Parameter(Mandatory=$true)]
         [ValidateNotNullOrEmpty()]
-        [DBConnectionInfo] $ConnectionInfo,
+        [object] $ConnectionInfo,
 
         [Parameter(Mandatory=$false)]
         [int] $QueryTimeout = 30
     )
 
-    if ($WhatIfPreference -eq $true)
+     # assembly connection string
+    $connectionString = "User ID=$($ConnectionInfo.DbUser);Password=$($ConnectionInfo.DbPass);Initial Catalog=$($ConnectionInfo.Database);Data Source=$($ConnectionInfo.Server);"
+
+    if ($ConnectionInfo.UseAzureADAuth)
     {
-    Write-Host "[WHATIF MODE] Executing following SQL against '$ConnectionInfo' (timeout: $QueryTimeout sec): `n$Query"
-    } else
-    {
-        # assembly connection string
-        $connectionString = "User ID=$($ConnectionInfo.DbUser);Password=$($ConnectionInfo.DbPass);Initial Catalog=$($ConnectionInfo.Database);Data Source=$($ConnectionInfo.Server);"
-
-        if ($ConnectionInfo.UseAzureADAuth)
-        {
-            $connectionString += 'Authentication=Active Directory Password;'
-        }
-
-        $result = Invoke-Sqlcmd `
-            -Query $Query `
-            -QueryTimeout $QueryTimeout `
-            -ConnectionString $connectionString
-
-        if ($? -eq $false) # last command status is not OK and ErrorAction allows to go this line (Continue, SilentlyContinue)
-        {
-            [string]$msg = $Error[0].ToString()
-
-            Write-Warning "$msg"
-        }
-
-        return $result
+        $connectionString += 'Authentication=Active Directory Password;'
     }
+
+    $result = Invoke-Sqlcmd `
+        -Query $Query `
+        -QueryTimeout $QueryTimeout `
+        -ConnectionString $connectionString
+
+    if ($? -eq $false) # last command status is not OK and ErrorAction allows to go this line (Continue, SilentlyContinue)
+    {
+        [string]$msg = $Error[0].ToString()
+
+        Write-Warning "$msg"
+    }
+
+    return $result
 }
 
 function Exec-SQL()
@@ -112,7 +105,7 @@ function Exec-SQL()
 
     $query | out-file -filepath $tempPathForQuery
 
-    Write-Host " Executing '$tempPathForQuery' script, log to '$tempPathForLog'..."
+    Write-Verbose " Executing '$tempPathForQuery' script, log to '$tempPathForLog'..."
 
     $server = $connectionInfo.Server
     $db = $connectionInfo.Database
@@ -151,7 +144,7 @@ function Exec-SQL()
     return $outContent
 }
 
-function Check-DBVersionControl
+function Check-IsVersionControlEnabled
 {
     param
     (
@@ -161,15 +154,39 @@ function Check-DBVersionControl
     )
 
   $result = Invoke-Sqlcmd2 `
-    -Query "SELECT * 
-                 FROM INFORMATION_SCHEMA.TABLES 
-                 WHERE TABLE_SCHEMA = 'dbo' 
-                 AND  TABLE_NAME = 'SchemaChanges'" `
+    -Query "select object_id('__SchemaChanges') as oid" `
     -ConnectionInfo $connectionInfo `
     -ErrorAction Stop
 	
   # true means enabled version control
-  return $null -ne $result
+  return $result.oid -ne [DBNull]::Value
+}
+
+function Get-AppliedChanges
+{
+    [OutputType([DBSCInfo[]])]
+    param
+    (
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [DBConnectionInfo] $connectionInfo
+    )
+    
+    [array] $sqlResult = Invoke-Sqlcmd2 `
+      -Query 'SELECT ChangeId, AppliedAt, Notes FROM __SchemaChanges' `
+      -ConnectionInfo $connectionInfo `
+      -ErrorAction Stop
+
+    [DBSCInfo[]] $result = @()
+    
+    if ($sqlResult -ne $null)
+    {
+        $result = $sqlResult `
+            | % { New-Object DBSCInfo -Property @{ChangeId = $_.ChangeId; AppliedAt = $_.AppliedAt; Notes = $_.Notes; } } `
+            | Sort-Object -Property Version
+    }
+
+    return $result
 }
 
 function Get-DbUpdateConfirmation
@@ -293,7 +310,7 @@ function Get-ScriptNotes
 
     [string] $hash = Get-MD5FileHash $path
 
-    $notes = 'Machine: {0}; User: {1}; Hash: {2};' -f [System.Net.Dns]::GetHostName(), [Environment]::UserName, $hash
+    $notes = 'Machine: {0}; User: {1}; MD5: {2};' -f [System.Net.Dns]::GetHostName(), [Environment]::UserName, $hash
 
     return $notes
 }
@@ -401,4 +418,126 @@ function Run-SqlScriptsInFolder
             }
         }
     }
+}
+
+function Get-AllExistingChanges
+{
+   [OutputType([FSSCInfo[]])]
+   param
+   (
+    [Parameter(Mandatory=$true)]
+    [string] $dir
+   )
+
+    [FSSCInfo[]] $scripts = Get-ChildItem $dir `
+        | Where-Object { $_.Name.EndsWith('.sql')  } `
+        | % { New-Object FSSCInfo -Property @{
+            ChangeId = $_.Name;
+            Path = $_.FullName;
+            CreatedAtUtc = $_.CreationTimeUtc;
+            Status = [FSSCStatus]::Undefined;
+            Hash = Get-MD5FileHash -path $_.FullName;
+            } } `
+        | Sort-Object -Property ChangeId
+
+    return $scripts
+}
+
+function Populate-ExistingChangesStatus
+{
+   [OutputType([FSSCInfo[]])]
+   param
+   (
+        [Parameter(Mandatory=$True, ValueFromPipeline=$True)]
+		[FSSCInfo[]] $all,
+
+        [Parameter(Mandatory=$True)]
+        [DBSCInfo[]] $applied
+   )
+
+    process
+    {
+        [DBSCInfo] $lastChange = $applied | Sort-Object -Property ChangeId  | Select-Object -Last 1
+
+        foreach ($fsSc_ in $all)
+        {
+            [FSSCInfo] $change = $fsSc_
+            
+            [DBSCInfo] $findResult = $applied | Where-Object { $change.ChangeId -eq $_.ChangeId }
+
+            if ($findResult)
+            {
+                $change.Status = [FSSCStatus]::Applied
+                $change.Info = "Applied at $($findResult.AppliedAt)"
+            } elseif ($lastChange -ne $null -and $change.ChangeId -lt $lastChange.ChangeId)
+            {
+                $change.Status = [FSSCStatus]::PendingOutOfOrder
+                $change.Info = 'Pending - Out of order'
+            } else
+            {
+                $change.Status = [FSSCStatus]::Pending
+                $change.Info = 'Pending'
+            }
+
+            return $change
+        }
+    }
+}
+
+function Apply-ChangeScript
+{
+    [CmdletBinding(SupportsShouldProcess=$True)]
+    param
+    (
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNull()]
+        [FSSCInfo] $changeScript,
+        
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [DBConnectionInfo] $connectionInfo
+    )
+
+    Write-Host -NoNewline " Apply '$($changeScript.ChangeId)' change script... "
+
+    $notes = Get-ScriptNotes -path $changeScript.Path
+    $notes = $notes.Replace("'", "''") # encode just in case
+
+    $sql = [IO.File]::ReadAllText($changeScript.Path)
+
+    $sql += "
+    GO
+    ;INSERT INTO dbo.__SchemaChanges (ChangeId, AppliedAt, Notes)
+                VALUES ('$($changeScript.ChangeId)', getutcdate(), '$notes')"
+
+    $sql = Make-SQLAtomic $sql
+
+    Write-Verbose ("`nExecuting SQL block:`n" + $sql);
+
+    try
+    {
+        $elapsed = Measure-Command `
+        {
+            $output = Exec-SQL -query $sql -connectionInfo $connectionInfo
+        }
+
+        # ensure applied
+        [DBSCInfo] $dbChangeInfo = Get-AppliedChanges -connectionInfo $connectionInfo `
+          | Where-Object { $_.ChangeId -eq $changeScript.ChangeId } `
+          | Select-Object -First 1
+
+        if ($dbChangeInfo -eq $null)
+        {
+            throw "An error occured applying '$($changeScript.ChangeId)' change script.`n$output"
+        }
+        
+    } catch
+    {
+        Write-Host ("  FAILED -- {0}`n" -f $_.Exception.ToString()) `
+            -ForegroundColor Red -BackgroundColor Yellow
+
+        throw
+    }
+        
+    Write-Success ('  SUCCESS ({0:F3} s.)' -f $elapsed.TotalSeconds)
 }

@@ -28,47 +28,27 @@ class DBConnectionInfo
 
 enum FSSCStatus
 {
-    Undefined = -1
-    Applied = 0
-    Pending = 1
-    Lost = 2
+    Undefined = 0
+    Applied = 1
+    Pending = 2
+    PendingOutOfOrder = 3
 }
 
 # represents info about File System stored Schema Change file
 class FSSCInfo
 {
-    [string] $Name
+    [string] $ChangeId
     [string] $Path
-    [version] $Version
     [datetime] $CreatedAtUtc
     [FSSCStatus] $Status
-    [string] $StatusDesc
+    [string] $Info
+    [string] $Hash
 }
 
 # represents DB info about applied Schema Change File
 class DBSCInfo
 {
-    [version] $Version # uniquely identifies regular change script
-    [datetime] $AppliedAtUtc
-    [string] $Notes
-    [string] $Name
-}
-
-# FEATURE CHANGES SUPPORT
-class FeatureFSSCInfo
-{
-    [string] $Name
-    [string] $Path
-    [datetime] $CreatedAtUtc
-    [FSSCStatus] $Status
-    [string] $StatusDesc
-}
-
-class FeatureDBSCInfo
-{
-    [string] $Name # uniquely identifies feature change script
-    [datetime] $AppliedAtUtc
+    [string] $ChangeId # uniquely identifies change script
+    [datetime] $AppliedAt
     [string] $Notes
 }
-
-# END OF FEATURE CHANGES SUPPORT

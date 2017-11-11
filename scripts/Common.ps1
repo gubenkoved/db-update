@@ -5,19 +5,16 @@ function Write-Success
 {
     param
     (
-        [string]
-        $string
+        [string] $string
     )
 
     Write-Host $string -ForegroundColor Green
 }
 
-function Create-ConnectionInfo()
+function Use-Database
 {
-    [OutputType([DBConnectionInfo])]
-
-    Param
-    (      
+    param
+    (
         [parameter(Mandatory=$true)]
         [string] $Server,
 
@@ -33,7 +30,9 @@ function Create-ConnectionInfo()
         [parameter(Mandatory=$false)]
         [bool] $UseAzureADAuth = $false
     )
-    
+
+    if ($Script:ConnectionInfo -ne $null) { Write-Warning "Already connected to the DB, reconnecting..." }
+
     [DBConnectionInfo] $connectionInfo = New-Object DBConnectionInfo
     
     $connectionInfo.Server = $Server
@@ -41,12 +40,38 @@ function Create-ConnectionInfo()
     $connectionInfo.DbUser = $DbUser
     $connectionInfo.DbPass = $DbPass
     $connectionInfo.UseAzureADAuth = $UseAzureADAuth
+
+    # check the connection
+    Write-Host "Checking the connection... " -NoNewline
     
-    return $connectionInfo
+    try
+    {
+        $dbResult = Invoke-Sqlcmd2 -Query "select 1" -ConnectionInfo $connectionInfo -ErrorAction Stop
+        Write-Success "OK"
+    } catch
+    {
+        throw "Error checking connection: $($_.Exception.Message)"
+    }
+
+    $Script:ConnectionInfo = $connectionInfo
+}
+
+function Ensure-DatabaseConnectionInfo
+{
+    [CmdletBinding()]
+    [OutputType([DBConnectionInfo])]
+    param
+    (
+    )
+
+    if ($Script:ConnectionInfo -eq $null) { Write-Error "Invoke Use-Database to work with database updates" }
+
+    return $Script:ConnectionInfo
 }
 
 function Invoke-Sqlcmd2
 {
+    [CmdletBinding()]
     param
     (
         [Parameter(Mandatory=$true)]
@@ -86,7 +111,7 @@ function Invoke-Sqlcmd2
 
 function Exec-SQL()
 {
-    [CmdletBinding(SupportsShouldProcess=$True)]
+    [CmdletBinding()]
     param
     (
         [Parameter(Mandatory=$true)]
@@ -146,20 +171,51 @@ function Exec-SQL()
 
 function Check-IsVersionControlEnabled
 {
+    [CmdletBinding()]
     param
     (
-        [Parameter(Mandatory=$true)]
-        [ValidateNotNullOrEmpty()]
-        [DBConnectionInfo] $connectionInfo
     )
 
-  $result = Invoke-Sqlcmd2 `
-    -Query "select object_id('__SchemaChanges') as oid" `
-    -ConnectionInfo $connectionInfo `
-    -ErrorAction Stop
+    $connectionInfo = Ensure-DatabaseConnectionInfo -ErrorAction Stop
+
+    $result = Invoke-Sqlcmd2 `
+        -Query "select object_id('__SchemaChanges') as oid" `
+        -ConnectionInfo $connectionInfo `
+        -ErrorAction Stop
 	
   # true means enabled version control
   return $result.oid -ne [DBNull]::Value
+}
+
+function Enable-DatabaseUpdate
+{
+    [DBConnectionInfo] $connectionInfo = Ensure-DatabaseConnectionInfo -ErrorAction Stop
+
+    [bool] $versionControlEnabled = Check-IsVersionControlEnabled -ErrorAction Stop
+
+    if ($versionControlEnabled -eq $true)
+    {
+        Write-Warning "Version control already enabled on database $($connectionInfo.Database)"
+    } else
+    {
+        Write-Host -NoNewline "Enabling version control on database $($connectionInfo.Database)... "
+	
+        $x = Invoke-SqlCmd2 `
+	        -Query "CREATE TABLE [dbo].[__SchemaChanges](
+                        ChangeId nvarchar(256) NOT NULL,
+                        AppliedAt datetime NOT NULL,
+                        Notes nvarchar(max) NULL,
+
+	                    CONSTRAINT [PK_SchemaChanges] PRIMARY KEY CLUSTERED ([ChangeId] ASC)
+                    )
+
+                    INSERT INTO [__SchemaChanges] (ChangeId, AppliedAt, Notes)
+                    VALUES ('__init.sql', GETDATE(), 'initial install')" `
+            -ConnectionInfo $connectionInfo `
+            -ErrorAction Stop
+
+        Write-Success 'SUCCESS'
+    }
 }
 
 function Get-AppliedChanges
@@ -167,10 +223,9 @@ function Get-AppliedChanges
     [OutputType([DBSCInfo[]])]
     param
     (
-        [Parameter(Mandatory=$true)]
-        [ValidateNotNullOrEmpty()]
-        [DBConnectionInfo] $connectionInfo
     )
+
+    $connectionInfo = Ensure-DatabaseConnectionInfo -ErrorAction Stop
     
     [array] $sqlResult = Invoke-Sqlcmd2 `
       -Query 'SELECT ChangeId, AppliedAt, Notes FROM __SchemaChanges' `
@@ -189,31 +244,11 @@ function Get-AppliedChanges
     return $result
 }
 
-function Get-DbUpdateConfirmation
-{
-   param
-   (
-     [string]
-     $expected
-   )
-
-    Write-Host 'Please type the name of the environment you are going to update'
-    Write-Warning "$expected"
-
-    $answer = Read-Host "To make sure that it's as expected, please type the name of environment"
-
-    if ($answer -ne $expected)
-    {
-        throw "This was not expected answer, please make sure you are running DB Update Script against the expected environment that is $expected"
-    }
-}
-
 function Wrap-SQLBatches
 {
    param
    (
-     [string]
-     $sql
+     [string] $sql
    )
 
     $preTempl = '
@@ -256,8 +291,7 @@ function Make-SQLAtomic
 {
    param
    (
-     [string]
-     $sql
+     [string] $sql
    )
 
     #Write-Host "Source: $sql"
@@ -294,19 +328,9 @@ function Get-ScriptNotes
 {
     param
     (
-        [Parameter(Mandatory=$true, ParameterSetName="sc")]
-        [FSSCInfo]
-        $schemaChangeInfo,
-
-        [Parameter(Mandatory=$true, ParameterSetName="generic")]
-        [string]
-        $path
+        [Parameter(Mandatory=$true)]
+        [string] $path
     )
-
-    if ($PsCmdlet.ParameterSetName -eq "sc")
-    {
-        $path = $schemaChangeInfo.Path
-    }
 
     [string] $hash = Get-MD5FileHash $path
 
@@ -315,40 +339,12 @@ function Get-ScriptNotes
     return $notes
 }
 
-function Parse-ChangeFileVersion
-{
-   param
-   (
-     [string]
-     $filename
-   )
-
-    #Write-Host "Filename was $filename"
-
-    $r = $filename -match '^sc\.([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)\.sql$'
-
-    if (-not $r)
-    {
-        return $null;
-    }
-
-    $major = [convert]::ToInt32($matches[1])
-    $minor = [convert]::ToInt32($matches[2])
-    $build = [convert]::ToInt32($matches[3])
-    $point = [convert]::ToInt32($matches[4])
-
-    $verStr = "$major.$minor.$build.$point"
-
-    return [version] $verStr
-}
-
 function Get-AllExistingChanges
 {
    [OutputType([FSSCInfo[]])]
    param
    (
-     [string]
-     $dir
+     [string] $dir
    )
 
     [FSSCInfo[]] $scripts = Get-ChildItem $dir `
@@ -371,19 +367,15 @@ function Get-AllExistingChanges
 
 function Run-SqlScriptsInFolder
 {
-    [CmdletBinding(SupportsShouldProcess=$True)]
+    [CmdletBinding()]
     Param
     (
         [Parameter(Mandatory=$true)]
-        [ValidateNotNullOrEmpty()]
         [DBConnectionInfo] $connectionInfo,
 
         [Parameter(Mandatory=$true)]
         [ValidateScript({Test-Path $_})] 
-        [string] $folder,
-
-        [Parameter(Mandatory=$false)]
-        [bool] $continueOnErrors = $false
+        [string] $folder
     )
 
     $scripts = Get-ChildItem $folder `
@@ -408,14 +400,7 @@ function Run-SqlScriptsInFolder
             Write-Success 'SUCCESS'
         } catch
         {
-            if ($continueOnErrors)
-            {
-                Write-Warning "$($_.Exception.Message)"
-            } else
-            {
-                Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
-                throw
-            }
+            Write-Error "ERROR running $($script.Name): $($_.Exception.Message)"
         }
     }
 }
@@ -486,29 +471,27 @@ function Populate-ExistingChangesStatus
 
 function Apply-ChangeScript
 {
-    [CmdletBinding(SupportsShouldProcess=$True)]
+    [CmdletBinding()]
     param
     (
         [Parameter(Mandatory=$true)]
         [ValidateNotNull()]
-        [FSSCInfo] $changeScript,
-        
-        [Parameter(Mandatory=$true)]
-        [ValidateNotNullOrEmpty()]
-        [DBConnectionInfo] $connectionInfo
+        [FSSCInfo] $ChangeScript
     )
 
-    Write-Host -NoNewline " Apply '$($changeScript.ChangeId)' change script... "
+    $connectionInfo = Ensure-DatabaseConnectionInfo -ErrorAction Stop
 
-    $notes = Get-ScriptNotes -path $changeScript.Path
+    Write-Host -NoNewline " Apply '$($ChangeScript.ChangeId)' change script... "
+
+    $notes = Get-ScriptNotes -path $ChangeScript.Path
     $notes = $notes.Replace("'", "''") # encode just in case
 
-    $sql = [IO.File]::ReadAllText($changeScript.Path)
+    $sql = [IO.File]::ReadAllText($ChangeScript.Path)
 
     $sql += "
     GO
     ;INSERT INTO dbo.__SchemaChanges (ChangeId, AppliedAt, Notes)
-                VALUES ('$($changeScript.ChangeId)', getutcdate(), '$notes')"
+                VALUES ('$($ChangeScript.ChangeId)', getutcdate(), '$notes')"
 
     $sql = Make-SQLAtomic $sql
 
@@ -516,19 +499,16 @@ function Apply-ChangeScript
 
     try
     {
-        $elapsed = Measure-Command `
-        {
-            $output = Exec-SQL -query $sql -connectionInfo $connectionInfo
-        }
+        $elapsed = Measure-Command { $output = Exec-SQL -query $sql -connectionInfo $connectionInfo }
 
         # ensure applied
-        [DBSCInfo] $dbChangeInfo = Get-AppliedChanges -connectionInfo $connectionInfo `
-          | Where-Object { $_.ChangeId -eq $changeScript.ChangeId } `
+        [DBSCInfo] $dbChangeInfo = Get-AppliedChanges -connectionInfo $connectionInfo -ErrorAction Stop `
+          | Where-Object { $_.ChangeId -eq $ChangeScript.ChangeId } `
           | Select-Object -First 1
 
         if ($dbChangeInfo -eq $null)
         {
-            throw "An error occured applying '$($changeScript.ChangeId)' change script.`n$output"
+            throw "An error occured applying '$($ChangeScript.ChangeId)' change script.`n$output"
         }
         
     } catch
@@ -540,4 +520,26 @@ function Apply-ChangeScript
     }
         
     Write-Success ('  SUCCESS ({0:F3} s.)' -f $elapsed.TotalSeconds)
+}
+
+function Ensure-Directory
+{
+    [CmdletBinding()]
+    param
+    (
+        [string] $ErrorMessagePrefix,
+        [string] $Dir
+    )
+
+    if ([string]::IsNullOrEmpty($Dir))
+    {
+        Write-Error "$ErrorMessagePrefix Directory was not specified"
+    }
+
+    $exists = Test-Path -Path $Dir -PathType Container
+
+    if ($exists -eq $false)
+    {
+        Write-Error "$ErrorMessagePrefix Directory '$Dir' was not found"
+    }
 }

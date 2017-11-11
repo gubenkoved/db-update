@@ -1,5 +1,5 @@
 ﻿# data structures are separated, because any change in classes
-# will cause type conflic when using strongly typed variables until PS session restart
+# will cause type conflict when using strongly typed variables until PS session restart
 
 class DBConnectionInfo
 {

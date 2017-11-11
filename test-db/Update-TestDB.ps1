@@ -1,13 +1,24 @@
-..\scripts\Update-Database.ps1 -serverInstance localhost `
-    -dbuser 'sa' `
-    -dbpass 'sa' `
-    -database 'test' `
-    -changeScriptsLocation '.\schema-changes' `
-    -recreateStoredProcedures $true <# optional #> `
-    -storedProceduresLocation '.\stored-procedures' <# optional #> `
-    -recreateFunctions $true <# optional #> `
-    -functionsLocation '.\functions' <# optional #> `
-    -recreateViews $true <# optional #> `
-    -viewsLocation '.\views' <# optional #> `
-    -useADAuth $false <# optional #> `
-    -makeDbRestrictedUserModeDuringUpdate $true <# optional #>
+Push-Location $PSScriptRoot
+
+try
+{
+    Import-Module ..\scripts\DBUpdater.psm1 -Force
+
+    Use-Database -Server . `
+        -Database 'test6' `
+        -DbUser 'sa' `
+        -DbPass 'sa' `
+        -UseAzureADAuth $false <# optional #>
+
+    Update-Database -ChangeScriptsLocation '.\schema-changes' `
+        -RecreateStoredProcedures $true `
+        -StoredProceduresLocation '.\stored-procedures' <# optional #> `
+        -RecreateFunctions $true <# optional #> `
+        -FunctionsLocation '.\functions' <# optional #> `
+        -RecreateViews $true <# optional #> `
+        -ViewsLocation '.\views' <# optional #> `
+        -MakeDbRestrictedUserModeDuringUpdate $true <# optional #>
+} finally
+{
+    Pop-Location
+}

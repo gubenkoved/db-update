@@ -43,7 +43,9 @@ function New-ChangeScriptFile
     $timestamp = [DateTime]::UtcNow.ToString("yyyyMMddHHmmss")
     $fullName = "$($timestamp)_$($ChangeName).sql"
 
-    $path = Join-Path $Directory $fullName
+    $resolvedDir = Resolve-Path $Directory
+
+    $path = Join-Path $resolvedDir $fullName
     $path = [System.IO.Path]::GetFullPath($path)
 
     $sinkhole = Annotated-Invoke "Creating schema change script '$path'" -script `

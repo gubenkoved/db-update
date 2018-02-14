@@ -5,7 +5,7 @@ try
     Import-Module ..\scripts\DBUpdater.psm1 -Force
 
     Use-Database -Server . `
-        -Database 'test6' `
+        -Database 'test' `
         -DbUser 'sa' `
         -DbPass 'sa' `
         -UseAzureADAuth $false <# optional #>

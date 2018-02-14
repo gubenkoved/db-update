@@ -17,7 +17,19 @@ https://blog.codinghorror.com/get-your-database-under-version-control/
     http://go.microsoft.com/fwlink/?LinkId=234947 
 - Microsoft® SQL Server® 2016 Feature Pack (PowerShellTools.msi)
 
-    https://www.microsoft.com/en-us/download/details.aspx?id=52676 
+    https://www.microsoft.com/en-us/download/details.aspx?id=52676
+
+- PowerShell module for SQL Server if missing
+
+    https://www.powershellgallery.com/packages/SqlServer/
+
+```PowerShell
+Install-Module -Name SqlServer 
+```
+
+*Note:* In some cases differnt version of `Invoke-Sqlcmd` might be already installed and causing troubles. Make sure your version of `Invoke-Sqlcmd` supports `-ConnectionString` parameter. Personally I ended up with renaming this directory that contains old `Invoke-Sqlcmd`:
+
+`C:\Program Files\Microsoft SQL Server\130\Tools\PowerShell\Modules\SQLPS`
 
 # Process
 

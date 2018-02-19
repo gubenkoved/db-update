@@ -1,7 +1,4 @@
-﻿# Import SqlServer module -- we will need advanced Invoke-Sqlcmd from there
-Import-module SqlServer
-
-# import shared code
+﻿# import shared code
 . $PSScriptRoot\Common.ps1
 . $PSScriptRoot\New-ChangeScriptFile.ps1
 . $PSScriptRoot\Update-Database.ps1
@@ -14,6 +11,7 @@ Export-ModuleMember -Function New-ChangeScriptFile
 Export-ModuleMember -Function Use-Database
 Export-ModuleMember -Function Enable-DatabaseUpdate
 Export-ModuleMember -Function Update-Database
+Export-ModuleMember -Function Mark-ChangeScriptsAsApplied
 
 # dev time exports
 # Export-ModuleMember -Function Get-AppliedChanges

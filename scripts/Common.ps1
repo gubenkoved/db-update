@@ -1,6 +1,8 @@
 # import custom data structures
 . $PSScriptRoot\Data.ps1
 
+Import-module SqlServer # we will need advanced Invoke-Sqlcmd from there that supports ConnectionString
+
 function Write-Success
 {
     param
@@ -476,7 +478,10 @@ function Apply-ChangeScript
     (
         [Parameter(Mandatory=$true)]
         [ValidateNotNull()]
-        [FSSCInfo] $ChangeScript
+        [FSSCInfo] $ChangeScript,
+
+        [Parameter(Mandatory=$false)]
+        [bool] $MarkOnlyMode = $false
     )
 
     $connectionInfo = Ensure-DatabaseConnectionInfo -ErrorAction Stop
@@ -487,6 +492,14 @@ function Apply-ChangeScript
     $notes = $notes.Replace("'", "''") # encode just in case
 
     $sql = [IO.File]::ReadAllText($ChangeScript.Path)
+
+    # when mark only mode, then overwrite real script
+    if ($MarkOnlyMode -eq $true)
+    {
+        Write-Host -NoNewline "  MARK ONLY"
+        $sql = "-- MARK ONLY"
+        $notes += " MARK ONLY;"
+    }
 
     $sql += "
     GO

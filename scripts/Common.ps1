@@ -341,32 +341,6 @@ function Get-ScriptNotes
     return $notes
 }
 
-function Get-AllExistingChanges
-{
-   [OutputType([FSSCInfo[]])]
-   param
-   (
-     [string] $dir
-   )
-
-    [FSSCInfo[]] $scripts = Get-ChildItem $dir `
-        | Where-Object { Parse-ChangeFileVersion $_.Name } `
-        | Sort-Object -Property { Parse-ChangeFileVersion $_.Name } `
-        | % { New-Object FSSCInfo -Property @{`
-            Name = $_.Name
-            Path = $_.FullName
-            Version = Parse-ChangeFileVersion $_.Name
-            CreatedAtUtc = $_.CreationTimeUtc
-            Status = [FSSCStatus] 'Undefined' } }
-
-    if ($scripts -eq $null) # no files -> replace null via empty array
-    {
-        $scripts = @()
-    }
-
-    return $scripts
-}
-
 function Run-SqlScriptsInFolder
 {
     [CmdletBinding()]
@@ -412,22 +386,45 @@ function Get-AllExistingChanges
    [OutputType([FSSCInfo[]])]
    param
    (
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory=$true, ValueFromPipeline=$true)]
     [string] $dir
    )
 
     [FSSCInfo[]] $scripts = Get-ChildItem $dir `
         | Where-Object { $_.Name.EndsWith('.sql')  } `
-        | % { New-Object FSSCInfo -Property @{
-            ChangeId = $_.Name;
-            Path = $_.FullName;
-            CreatedAtUtc = $_.CreationTimeUtc;
-            Status = [FSSCStatus]::Undefined;
-            Hash = Get-MD5FileHash -path $_.FullName;
-            } } `
+        | % { Get-ChangeScriptInfo $_.FullName }`
         | Sort-Object -Property ChangeId
 
     return $scripts
+}
+
+function Get-ChangeScriptInfo
+{
+    [OutputType([FSSCInfo])]
+    param
+    (
+        [Parameter(Mandatory=$true, ValueFromPipeline=$true)]
+        [string] $path
+    )
+
+    if (-not (Test-Path $path))
+    {
+        throw "Change script '$path' was not found (working dir is $(Resolve-Path .))"
+    }
+
+    $fullPath = Resolve-Path $path
+
+    [System.IO.FileInfo] $fileInfo = New-Object System.IO.FileInfo $fullPath
+
+    $result = New-Object FSSCInfo -Property @{
+            ChangeId = $fileInfo.Name;
+            Path = $fileInfo.FullName;
+            CreatedAtUtc = $fileInfo.CreationTimeUtc;
+            Status = [FSSCStatus]::Undefined;
+            Hash = Get-MD5FileHash -path $fileInfo.FullName;
+        }
+
+    return $result
 }
 
 function Populate-ExistingChangesStatus
